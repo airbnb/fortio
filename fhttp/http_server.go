@@ -107,6 +107,16 @@ func EchoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// UnhealthyEchoHandler creates an http server handler always returns error.
+func UnhealthyEchoHandler(errCode int) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if log.LogVerbose() {
+			LogRequest(r, "Echo") // will also print headers
+		}
+		http.Error(w, "injected by fortio", errCode)
+	}
+}
+
 func writePayload(w http.ResponseWriter, status int, size int) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(size))
@@ -301,7 +311,9 @@ func CacheOn(w http.ResponseWriter) {
 // Returns the mux and addr where the listening socket is bound.
 // The .Port can be retrieved from it when requesting the 0 port as
 // input for dynamic http server.
-func Serve(port, debugPath string) (*http.ServeMux, net.Addr) {
+//
+// If httpStatus > 0, the server will always return that http status code.
+func Serve(port, debugPath string, httpStatus int) (*http.ServeMux, net.Addr) {
 	startTime = time.Now()
 	mux, addr := HTTPServer("echo", port)
 	if addr == nil {
@@ -310,14 +322,18 @@ func Serve(port, debugPath string) (*http.ServeMux, net.Addr) {
 	if debugPath != "" {
 		mux.HandleFunc(debugPath, DebugHandler)
 	}
-	mux.HandleFunc("/", EchoHandler)
+	if httpStatus > 0 {
+		mux.HandleFunc("/", UnhealthyEchoHandler(httpStatus))
+	} else {
+		mux.HandleFunc("/", EchoHandler)
+	}
 	return mux, addr
 }
 
 // ServeTCP is Serve() but restricted to TCP (return address is assumed
 // to be TCP - will panic for unix domain)
 func ServeTCP(port, debugPath string) (*http.ServeMux, *net.TCPAddr) {
-	mux, addr := Serve(port, debugPath)
+	mux, addr := Serve(port, debugPath, 0)
 	if addr == nil {
 		return nil, nil // error already logged
 	}
