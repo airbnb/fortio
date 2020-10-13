@@ -173,6 +173,10 @@ var (
 	// Mirror origin global setting (should be per destination eventually).
 	mirrorOriginFlag = flag.Bool("multi-mirror-origin", true, "Mirror the request url to the target for multi proxies (-M)")
 	multiSerialFlag  = flag.Bool("multi-serial-mode", false, "Multi server (-M) requests one at a time instead of parallel mode")
+
+	// Flags for error injections.
+	unhealthyHostsFlag = flag.String("unhealthy-hosts", "", "comma separated list of unhealthy hostnames; if hostname is matched, -inject-status will be used as the return code")
+	injectStatusFlag   = flag.Int("inject-status", 503, "injected http error status, converted to grpc code if grpc flag is set to true; only used when set to greater than 0")
 )
 
 func main() {
@@ -238,13 +242,14 @@ func main() {
 		if *tcpPortFlag != disabled {
 			fnet.TCPEchoServer("tcp-echo", *tcpPortFlag)
 		}
+		httpStatus := getInjectedHTTPStatus(*unhealthyHostsFlag, *injectStatusFlag)
 		if *grpcPortFlag != disabled {
-			fgrpc.PingServer(*grpcPortFlag, *certFlag, *keyFlag, fgrpc.DefaultHealthServiceName, uint32(*maxStreamsFlag))
+			fgrpc.PingServer(*grpcPortFlag, *certFlag, *keyFlag, fgrpc.DefaultHealthServiceName, uint32(*maxStreamsFlag), httpStatus)
 		}
 		if *redirectFlag != disabled {
 			fhttp.RedirectToHTTPS(*redirectFlag)
 		}
-		if !ui.Serve(baseURL, *echoPortFlag, *echoDbgPathFlag, *uiPathFlag, *staticDirFlag, *dataDirFlag, percList) {
+		if !ui.Serve(baseURL, *echoPortFlag, *echoDbgPathFlag, *uiPathFlag, *staticDirFlag, *dataDirFlag, percList, httpStatus) {
 			os.Exit(1) // error already logged
 		}
 		startProxies()
@@ -315,6 +320,27 @@ func fortioNC() {
 		// already logged but exit with error back to shell/caller
 		os.Exit(1)
 	}
+}
+
+func getInjectedHTTPStatus(unhealthyHosts string, injectStatus int) int {
+	if len(unhealthyHosts) == 0 {
+		return 0
+	}
+	if injectStatus <= 0 {
+		return 0
+	}
+
+	name, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("fail to get hostname: %v", err)
+	}
+
+	for _, h := range strings.Split(unhealthyHosts, ",") {
+		if h == name {
+			return injectStatus
+		}
+	}
+	return 0
 }
 
 func fortioLoad(justCurl bool, percList []float64) {

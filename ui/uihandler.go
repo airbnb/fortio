@@ -875,10 +875,12 @@ func downloadOne(w http.ResponseWriter, client *fhttp.Client, name string, u str
 // Serve starts the fhttp.Serve() plus the UI server on the given port
 // and paths (empty disables the feature). uiPath should end with /
 // (be a 'directory' path). Returns true if server is started successfully.
-func Serve(baseurl, port, debugpath, uipath, staticRsrcDir string, datadir string, percentileList []float64) bool {
+//
+// If httpStatus > 0, the server will always return that http status.
+func Serve(baseurl, port, debugpath, uipath, staticRsrcDir string, datadir string, percentileList []float64, httpStatus int) bool {
 	baseURL = baseurl
 	startTime = time.Now()
-	mux, addr := fhttp.Serve(port, debugpath)
+	mux, addr := fhttp.Serve(port, debugpath, httpStatus)
 	if addr == nil {
 		return false // Error already logged
 	}

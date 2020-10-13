@@ -18,6 +18,7 @@ package fgrpc
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"time"
 
@@ -26,10 +27,16 @@ import (
 	"fortio.org/fortio/stats"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
+
+	"fortio.org/fortio/fnet"
+	"fortio.org/fortio/log"
+	"fortio.org/fortio/stats"
 )
 
 const (
@@ -54,12 +61,47 @@ func (s *pingSrv) Ping(c context.Context, in *PingMessage) (*PingMessage, error)
 	return &out, nil
 }
 
+type unhealthyPingSrv struct {
+	errCode codes.Code
+}
+
+func (s *unhealthyPingSrv) Ping(c context.Context, in *PingMessage) (*PingMessage, error) {
+	log.LogVf("Ping called %+v (ctx %+v)", *in, c)
+	return nil, status.Error(s.errCode, "injected by fortio")
+}
+
+func codeFromHTTPStatus(status int) codes.Code {
+	// https://github.com/grpc/grpc/blob/master/doc/http-grpc-status-mapping.md
+	switch status {
+	case http.StatusBadRequest:
+		return codes.Internal
+	case http.StatusUnauthorized:
+		return codes.Unauthenticated
+	case http.StatusForbidden:
+		return codes.PermissionDenied
+	case http.StatusNotFound:
+		return codes.Unimplemented
+	case http.StatusTooManyRequests:
+		return codes.Unavailable
+	case http.StatusBadGateway:
+		return codes.Unavailable
+	case http.StatusServiceUnavailable:
+		return codes.Unavailable
+	case http.StatusGatewayTimeout:
+		return codes.Unavailable
+	default:
+		return codes.Unknown
+	}
+}
+
 // PingServer starts a grpc ping (and health) echo server.
 // returns the port being bound (useful when passing "0" as the port to
 // get a dynamic server). Pass the healthServiceName to use for the
 // grpc service name health check (or pass DefaultHealthServiceName)
 // to be marked as SERVING. Pass maxConcurrentStreams > 0 to set that option.
-func PingServer(port, cert, key, healthServiceName string, maxConcurrentStreams uint32) net.Addr {
+//
+// If httpStatus > 0, the server will always return the corresponding grpc error code.
+func PingServer(port, cert, key, healthServiceName string, maxConcurrentStreams uint32, httpStatus int) net.Addr {
 	socket, addr := fnet.Listen("grpc '"+healthServiceName+"'", port)
 	if addr == nil {
 		return nil
@@ -83,7 +125,11 @@ func PingServer(port, cert, key, healthServiceName string, maxConcurrentStreams 
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus(healthServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
-	RegisterPingServerServer(grpcServer, &pingSrv{})
+	if httpStatus > 0 {
+		RegisterPingServerServer(grpcServer, &unhealthyPingSrv{errCode: codeFromHTTPStatus(httpStatus)})
+	} else {
+		RegisterPingServerServer(grpcServer, &pingSrv{})
+	}
 	go func() {
 		if err := grpcServer.Serve(socket); err != nil {
 			log.Fatalf("failed to start grpc server: %v", err)
@@ -95,7 +141,7 @@ func PingServer(port, cert, key, healthServiceName string, maxConcurrentStreams 
 // PingServerTCP is PingServer() assuming tcp instead of possible unix domain socket port, returns
 // the numeric port.
 func PingServerTCP(port, cert, key, healthServiceName string, maxConcurrentStreams uint32) int {
-	addr := PingServer(port, cert, key, healthServiceName, maxConcurrentStreams)
+	addr := PingServer(port, cert, key, healthServiceName, maxConcurrentStreams, 0)
 	if addr == nil {
 		return -1
 	}

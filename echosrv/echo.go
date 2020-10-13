@@ -40,7 +40,7 @@ func main() {
 		fmt.Println(version.Long())
 		os.Exit(0)
 	}
-	if _, addr := fhttp.Serve(*port, *debugPath); addr == nil {
+	if _, addr := fhttp.Serve(*port, *debugPath, 0); addr == nil {
 		os.Exit(1) // error already logged
 	}
 	select {}
